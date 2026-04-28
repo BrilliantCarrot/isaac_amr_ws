@@ -4,7 +4,7 @@ Isaac Sim-based autonomous mobile manipulator project integrating AMR navigation
 
 This project is an extension of a previously completed Gazebo-based AMR autonomy stack. The goal is to migrate and validate the navigation stack in NVIDIA Isaac Sim, then extend it into a mobile manipulation system capable of autonomous navigation, object detection, picking, and returning to the start position.
 
-![Straight trajectory comparison](images/whole map beginning.png)
+![map](images/whole_map_beginning.png)
 
 ---
 
