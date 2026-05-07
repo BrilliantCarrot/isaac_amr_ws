@@ -6,7 +6,7 @@ bags/
 maps/
 *.data
 *.posegraph
-*.yaml
+*.cfg
 
 # Python 관련
 __pycache__/
@@ -30,3 +30,6 @@ Thumbs.db
 tsan*
 *.jpg
 logs/
+
+# YOLO 관련
+*.pt
