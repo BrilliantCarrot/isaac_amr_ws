@@ -176,6 +176,20 @@ private:
   void pathCallback(const nav_msgs::msg::Path::SharedPtr msg);
   bool use_global_planner_ = false;  // true: /planned_path 대기, false: 하드코딩 경로
 
+  // /planned_path 수신 안정화 파라미터임.
+  // planner가 비슷한 경로를 연속 발행해도 MPC가 매번 waypoint를 리셋하지 않도록 막음.
+  double path_accept_min_interval_sec_{0.80};
+  double path_accept_force_interval_sec_{12.00};
+  double path_accept_avg_change_threshold_{0.10};
+  double path_accept_max_change_threshold_{0.30};
+  rclcpp::Time last_path_accept_time_;
+  bool has_accepted_path_{false};
+
+  double computeWaypointPathDifference(
+    const std::vector<StateVec> & new_path,
+    const std::vector<StateVec> & old_path,
+    double & max_dist) const;
+
   // 긴급 정지용 — /cmd_vel_delayed 직접 발행 (mock_link 우회)
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr emergency_stop_pub_;
 
@@ -230,6 +244,8 @@ private:
 
   // void rerouteWaypointsAroundObstacles();
 
+  bool filter_static_obstacles_in_global_planner_{true};
+
   double prev_raw_theta_    = 0.0;   // 직전 raw atan2 yaw 값 (래핑 delta 계산용)
   double continuous_theta_  = 0.0;   // 누적 연속 yaw (래핑 없는 절대값)
   // ── CBF Safety Filter ──────────────────────────────────────
@@ -241,6 +257,22 @@ private:
   double cbf_slack_p_ = 500.0;  // soft slack 페널티
   double cbf_d_safe_  = 0.0;    // 추가 안전 마진 [m]
   bool   cbf_enabled_ = true;   // CBF 활성화 여부 (런타임 토글용)
+  double cbf_react_dist_ = 1.0;
+  int    cbf_max_active_obstacles_ = 2;
+
+  bool   front_stop_enabled_ = true;
+  double front_slow_distance_ = 0.85;
+  double front_stop_distance_ = 0.25;
+  double front_corridor_half_width_ = 0.45;
+  double front_turn_bias_ = 0.18;
+  double front_min_turn_ = 0.10;
+  double front_clearance_filtered_ = 1e9;
+  bool   front_stop_active_ = false;
+
+  double tracking_min_forward_speed_ = 0.06;
+  double tracking_heading_slow_angle_ = 1.20;
+  double tracking_lateral_slow_error_ = 0.60;
+  double tracking_floor_min_ratio_ = 0.70;
 
   // ──────────────────────────────────────────────────────────
   // 도킹 관련 멤버
@@ -269,6 +301,9 @@ private:
   // 도킹 완료 판정 임계값
   double dock_pos_tol_ = 0.0;  // 위치 허용 오차 [m]  (파라미터 "dock_pos_tol")
   double dock_yaw_tol_ = 0.0;  // 헤딩 허용 오차 [rad] (파라미터 "dock_yaw_tol_deg")
+  double dock_pos_release_tol_ = 0.08;  // 헤딩정렬 중 위치 재수렴으로 돌아갈 거리 [m]
+  double dock_yaw_min_w_ = 0.10;        // 헤딩정렬 최소 회전 속도 [rad/s]
+  bool docking_heading_align_started_ = false;
 
   // 도킹 전용 reference 생성
   // N+1개를 모두 dock 포즈로 채워 MPC가 수렴하도록 유도

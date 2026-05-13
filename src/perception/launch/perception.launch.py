@@ -16,7 +16,7 @@ def generate_launch_description():
 
     # base_link 기준 카메라 optical frame 고정 TF
     # 의미:
-    #   카메라는 로봇 기준 앞쪽 0.3m, 위쪽 0.3m에 장착되어 있음
+    #   카메라는 로봇 기준 앞쪽 위쪽 0.6m에 장착되어 있음
     #   camera_rgb_optical_frame의 z축이 카메라가 보는 전방 방향이 되도록 회전시킴
     static_tf_base_to_camera = Node(
         package="tf2_ros",
@@ -24,9 +24,9 @@ def generate_launch_description():
         name="static_tf_base_to_camera_rgb_optical",
         output="screen",
         arguments=[
-            "--x", "0.3",
+            "--x", "0.08917",
             "--y", "0.0",
-            "--z", "0.3",
+            "--z", "0.3265",
             "--roll", "-1.57079632679",
             "--pitch", "0.0",
             "--yaw", "-1.57079632679",

@@ -13,20 +13,18 @@ from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
     """
-    Isaac Sim 전용 navigation bringup launch v2.
+    Isaac Sim W5 navigation bringup — LiDAR-only stable navigation version.
+
+    설계 방침:
+      - 주행 중에는 카메라/YOLO/RGB-D perception을 navigation loop에 넣지 않음.
+      - 주행 안전은 LiDAR obstacle_tracker_node + MPC/CBF가 담당.
+      - 카메라 perception은 정지 후 manipulation/pick 단계에서 별도 launch로 실행.
+      - W4/W5 디버깅에서 확인한 안정 MPC 튜닝값을 launch argument 기본값으로 반영.
 
     전제:
-      - Isaac Sim은 별도로 실행되어 있고 Play 상태여야 함
-      - Isaac Sim에서 /clock, /odom, /imu, /scan_raw, /cmd_vel bridge가 살아 있어야 함
-      - Gazebo, ros_gz_bridge, robot spawn은 실행하지 않음
-
-    v2 변경점:
-      - ekf_node에는 use_sim_time을 넘기지 않음
-        ekf_node 내부 IMU predict dt 계산이 this->now() 기반이라 use_sim_time=true면 dt=0 경고가 반복될 수 있음.
-      - slam_toolbox에만 use_sim_time을 전달함
-      - map_ekf_node / planner / mpc도 기존 수동 실행과 동일하게 use_sim_time 파라미터를 넘기지 않음
-      - startup delay를 늘려 TF/map 초기화 전에 후속 노드가 먼저 뜨는 문제를 줄임
-      - static_transform_publisher를 Humble 권장 new-style argument로 실행함
+      - Isaac Sim은 별도 실행 및 Play 상태.
+      - Isaac Sim에서 /clock, /odom, /imu, /scan_raw, /cmd_vel bridge가 살아 있어야 함.
+      - 안정 주행이 검증된 USD를 사용해야 함. 문제가 있던 4주차 USD는 drive graph를 건드리지 말 것.
     """
 
     # -------------------------
@@ -35,7 +33,7 @@ def generate_launch_description():
     declare_scan_fix_script = DeclareLaunchArgument(
         "scan_fix_script",
         default_value="/home/lyj/isaac_amr_ws/tools/scan_fix_node.py",
-        description="scan_raw를 보정해 /scan으로 재발행하는 Python script 경로",
+        description="/scan_raw를 보정해 /scan으로 재발행하는 Python script 경로",
     )
 
     declare_use_sim_time = DeclareLaunchArgument(
@@ -48,6 +46,12 @@ def generate_launch_description():
         "lidar_z",
         default_value="0.25",
         description="base_link 기준 sim_lidar z 위치 [m]",
+    )
+
+    declare_start_obstacle_tracker = DeclareLaunchArgument(
+        "start_obstacle_tracker",
+        default_value="true",
+        description="true이면 LiDAR 기반 obstacle_tracker_node 실행",
     )
 
     declare_start_planner = DeclareLaunchArgument(
@@ -86,10 +90,17 @@ def generate_launch_description():
         description="MPC 단독 테스트용 trajectory type",
     )
 
+    # 0.15 m/s global-planner 주행 검증 튜닝값
     declare_v_ref = DeclareLaunchArgument(
         "v_ref",
         default_value="0.15",
         description="MPC reference speed [m/s]",
+    )
+
+    declare_v_min = DeclareLaunchArgument(
+        "v_min",
+        default_value="0.0",
+        description="MPC min linear speed [m/s]. W5 주행에서는 후진 방지를 위해 기본 0.0",
     )
 
     declare_v_max = DeclareLaunchArgument(
@@ -98,10 +109,46 @@ def generate_launch_description():
         description="MPC max linear speed [m/s]",
     )
 
+    declare_w_min = DeclareLaunchArgument(
+        "w_min",
+        default_value="-0.35",
+        description="MPC min angular speed [rad/s]",
+    )
+
     declare_w_max = DeclareLaunchArgument(
         "w_max",
         default_value="0.35",
         description="MPC max angular speed [rad/s]",
+    )
+
+    declare_dw_min = DeclareLaunchArgument(
+        "dw_min",
+        default_value="-0.10",
+        description="MPC min angular acceleration increment",
+    )
+
+    declare_dw_max = DeclareLaunchArgument(
+        "dw_max",
+        default_value="0.10",
+        description="MPC max angular acceleration increment",
+    )
+
+    declare_r_dw = DeclareLaunchArgument(
+        "r_dw",
+        default_value="70.0",
+        description="MPC angular command rate penalty",
+    )
+
+    declare_q_th = DeclareLaunchArgument(
+        "q_th",
+        default_value="2.0",
+        description="MPC heading error weight",
+    )
+
+    declare_q_y = DeclareLaunchArgument(
+        "q_y",
+        default_value="5.0",
+        description="MPC lateral error weight",
     )
 
     declare_cbf_enabled = DeclareLaunchArgument(
@@ -110,9 +157,59 @@ def generate_launch_description():
         description="MPC CBF obstacle avoidance 활성화 여부",
     )
 
+    declare_cbf_gamma = DeclareLaunchArgument(
+        "cbf_gamma",
+        default_value="1.5",
+        description="CBF class-K gain",
+    )
+
+    declare_cbf_d_safe = DeclareLaunchArgument(
+        "cbf_d_safe",
+        default_value="0.22",
+        description="CBF extra safety margin [m]",
+    )
+
+    declare_cbf_lookahead = DeclareLaunchArgument(
+        "cbf_lookahead",
+        default_value="0.25",
+        description="CBF lookahead distance [m]",
+    )
+
+    declare_cbf_react_dist = DeclareLaunchArgument(
+        "cbf_react_dist",
+        default_value="0.9",
+        description="CBF obstacle reaction distance [m]",
+    )
+
+    declare_cbf_max_active_obstacles = DeclareLaunchArgument(
+        "cbf_max_active_obstacles",
+        default_value="3",
+        description="CBF max active obstacles",
+    )
+
+    declare_tracking_min_forward_speed = DeclareLaunchArgument(
+        "tracking_min_forward_speed",
+        default_value="0.09",
+        description="Global-path tracking forward speed floor [m/s]",
+    )
+
+    declare_tracking_heading_slow_angle = DeclareLaunchArgument(
+        "tracking_heading_slow_angle",
+        default_value="1.05",
+        description="Heading error angle where tracking floor slows down [rad]",
+    )
+
+    declare_tracking_lateral_slow_error = DeclareLaunchArgument(
+        "tracking_lateral_slow_error",
+        default_value="0.30",
+        description="Lateral error where tracking floor slows down [m]",
+    )
+
+    # LaunchConfiguration handles
     use_sim_time = LaunchConfiguration("use_sim_time")
     scan_fix_script = LaunchConfiguration("scan_fix_script")
     lidar_z = LaunchConfiguration("lidar_z")
+    start_obstacle_tracker = LaunchConfiguration("start_obstacle_tracker")
     start_planner = LaunchConfiguration("start_planner")
     start_mpc = LaunchConfiguration("start_mpc")
     use_global_planner = LaunchConfiguration("use_global_planner")
@@ -120,9 +217,24 @@ def generate_launch_description():
     goal_y = LaunchConfiguration("goal_y")
     trajectory_type = LaunchConfiguration("trajectory_type")
     v_ref = LaunchConfiguration("v_ref")
+    v_min = LaunchConfiguration("v_min")
     v_max = LaunchConfiguration("v_max")
+    w_min = LaunchConfiguration("w_min")
     w_max = LaunchConfiguration("w_max")
+    dw_min = LaunchConfiguration("dw_min")
+    dw_max = LaunchConfiguration("dw_max")
+    r_dw = LaunchConfiguration("r_dw")
+    q_th = LaunchConfiguration("q_th")
+    q_y = LaunchConfiguration("q_y")
     cbf_enabled = LaunchConfiguration("cbf_enabled")
+    cbf_gamma = LaunchConfiguration("cbf_gamma")
+    cbf_d_safe = LaunchConfiguration("cbf_d_safe")
+    cbf_lookahead = LaunchConfiguration("cbf_lookahead")
+    cbf_react_dist = LaunchConfiguration("cbf_react_dist")
+    cbf_max_active_obstacles = LaunchConfiguration("cbf_max_active_obstacles")
+    tracking_min_forward_speed = LaunchConfiguration("tracking_min_forward_speed")
+    tracking_heading_slow_angle = LaunchConfiguration("tracking_heading_slow_angle")
+    tracking_lateral_slow_error = LaunchConfiguration("tracking_lateral_slow_error")
 
     pkg_localization = get_package_share_directory("localization")
     slam_launch_path = os.path.join(pkg_localization, "launch", "slam.launch.py")
@@ -169,7 +281,6 @@ def generate_launch_description():
         ],
     )
 
-    # 기존 수동 실행과 동일하게 use_sim_time을 넘기지 않음.
     ekf_node = TimerAction(
         period=2.0,
         actions=[
@@ -182,7 +293,6 @@ def generate_launch_description():
         ],
     )
 
-    # slam_toolbox만 /clock 기반으로 동작.
     slam_toolbox = TimerAction(
         period=5.0,
         actions=[
@@ -201,6 +311,34 @@ def generate_launch_description():
                 executable="map_ekf_node",
                 name="map_ekf_node",
                 output="screen",
+            )
+        ],
+    )
+
+    obstacle_tracker_node = TimerAction(
+        period=11.0,
+        actions=[
+            Node(
+                package="control_mpc",
+                executable="obstacle_tracker_node",
+                name="obstacle_tracker_node",
+                output="screen",
+                condition=IfCondition(start_obstacle_tracker),
+                parameters=[
+                    {
+                        "max_range_factor": 0.95,
+                        "cluster_tolerance": 0.35,
+                        "min_cluster_points": 3,
+                        "max_cluster_radius": 0.90,
+                        "ema_alpha": 0.25,
+                        "match_dist_thresh": 0.70,
+                        "min_obstacle_radius": 0.50,
+                        "persistence_timeout": 0.60,
+                        "merge_close_obstacles": True,
+                        "obstacle_merge_distance": 0.65,
+                        "merge_extra_radius": 0.05,
+                    }
+                ],
             )
         ],
     )
@@ -256,23 +394,24 @@ def generate_launch_description():
                         "use_global_planner": use_global_planner,
                         "trajectory_type": trajectory_type,
                         "v_ref_": v_ref,
+                        "v_min": v_min,
                         "v_max": v_max,
-                        "v_min": 0.0,
+                        "w_min": w_min,
                         "w_max": w_max,
-                        "w_min": -0.35,
-                        "dw_max": 0.10,
-                        "dw_min": -0.10,
-                        "r_dw": 70.0,
-                        "q_th": 2.0,
-                        "q_y": 5.0,
+                        "dw_min": dw_min,
+                        "dw_max": dw_max,
+                        "r_dw": r_dw,
+                        "q_th": q_th,
+                        "q_y": q_y,
                         "cbf_enabled": cbf_enabled,
-                        "cbf_d_safe": 0.22,
-                        "cbf_gamma": 1.5,
-                        "cbf_react_dist": 0.9,
-                        "cbf_max_active_obstacles": 3,
-                        "tracking_min_forward_speed": 0.09,
-                        "tracking_heading_slow_angle": 1.05,
-                        "tracking_lateral_slow_error": 0.30,
+                        "cbf_gamma": cbf_gamma,
+                        "cbf_d_safe": cbf_d_safe,
+                        "cbf_lookahead": cbf_lookahead,
+                        "cbf_react_dist": cbf_react_dist,
+                        "cbf_max_active_obstacles": cbf_max_active_obstacles,
+                        "tracking_min_forward_speed": tracking_min_forward_speed,
+                        "tracking_heading_slow_angle": tracking_heading_slow_angle,
+                        "tracking_lateral_slow_error": tracking_lateral_slow_error,
                     }
                 ],
             )
@@ -283,6 +422,7 @@ def generate_launch_description():
         declare_scan_fix_script,
         declare_use_sim_time,
         declare_lidar_z,
+        declare_start_obstacle_tracker,
         declare_start_planner,
         declare_start_mpc,
         declare_use_global_planner,
@@ -290,15 +430,31 @@ def generate_launch_description():
         declare_goal_y,
         declare_trajectory_type,
         declare_v_ref,
+        declare_v_min,
         declare_v_max,
+        declare_w_min,
         declare_w_max,
+        declare_dw_min,
+        declare_dw_max,
+        declare_r_dw,
+        declare_q_th,
+        declare_q_y,
         declare_cbf_enabled,
+        declare_cbf_gamma,
+        declare_cbf_d_safe,
+        declare_cbf_lookahead,
+        declare_cbf_react_dist,
+        declare_cbf_max_active_obstacles,
+        declare_tracking_min_forward_speed,
+        declare_tracking_heading_slow_angle,
+        declare_tracking_lateral_slow_error,
         scan_fix,
         static_tf_lidar,
         static_tf_imu,
         ekf_node,
         slam_toolbox,
         map_ekf_node,
+        obstacle_tracker_node,
         path_planner_node,
         mpc_node,
     ])

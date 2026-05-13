@@ -16,6 +16,7 @@
 
 #include <vector>
 #include <utility>
+#include <string>
 
 #include <rclcpp/rclcpp.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -29,6 +30,18 @@
 
 namespace planning
 {
+
+// path planner 내부에서 일정 시간 유지하며 사용하는 장애물 표현임.
+// /obstacles/detected 메시지를 그대로 쓰지 않고, hold/merge/inflation을 거친 뒤 A* grid에 마킹함.
+struct PlannerObstacle
+{
+  double x{0.0};
+  double y{0.0};
+  double vx{0.0};
+  double vy{0.0};
+  double radius{0.0};
+  rclcpp::Time last_seen;
+};
 
 class PathPlannerNode : public rclcpp::Node
 {
@@ -58,8 +71,16 @@ private:
     double origin_x, double origin_y, double resolution,
     double spacing_m) const;
 
-  // 동적 장애물 근접 판정
-  bool isObstacleNearPath(const amr_msgs::msg::ObstacleArray & obs) const;
+  // 동적/근거리 장애물 처리
+  void updateHeldObstacles(const amr_msgs::msg::ObstacleArray & obs);
+  std::vector<PlannerObstacle> getMergedPlannerObstacles() const;
+  void markPlannerObstacleOnGrid(
+    std::vector<int8_t> & grid, int w, int h,
+    double origin_x, double origin_y, double resolution,
+    const PlannerObstacle & obs) const;
+
+  // 장애물 근접 판정
+  bool isObstacleNearPath(const std::vector<PlannerObstacle> & obs) const;
 
   // Bresenham LOS
   bool hasLineOfSight(
@@ -89,6 +110,7 @@ private:
 
   std::vector<geometry_msgs::msg::PoseStamped> current_path_;
   amr_msgs::msg::ObstacleArray latest_obs_;
+  std::vector<PlannerObstacle> held_obstacles_;
   bool has_obs_{false};
 
   // 파라미터
@@ -97,7 +119,48 @@ private:
   double replan_obs_dist_;
   double wp_spacing_;
   double goal_tolerance_;
-  double replan_cooldown_sec_{0.5};
+  double replan_cooldown_sec_{1.20};
+
+  // A*와 CBF 역할 분리 파라미터
+  bool periodic_replan_enabled_{false};
+  bool off_path_replan_enabled_{true};
+  double off_path_replan_dist_{0.90};
+  double off_path_replan_cooldown_sec_{5.00};
+  bool planner_replan_on_lidar_obstacles_{true};
+  std::string planner_lidar_astar_mode_{"all"};
+  double planner_static_speed_threshold_{0.05};
+  bool map_update_replan_enabled_{true};
+  double map_update_replan_cooldown_sec_{2.00};
+
+  // 동적/근거리 장애물 경로계획 안정화 파라미터
+  double planner_min_obstacle_radius_{0.50};
+  double planner_obstacle_margin_{0.10};
+  double planner_obstacle_hold_sec_{1.00};
+  bool planner_use_velocity_filter_{false};
+  bool planner_merge_obstacles_{true};
+  double planner_obstacle_merge_distance_{0.75};
+  double planner_merge_extra_radius_{0.10};
+  double planner_max_merged_obstacle_radius_{0.80};
+
+  // A* + MPC 통합 시 /planned_path가 너무 자주 바뀌면 MPC reference가 계속 리셋되어 stop-and-go가 생김.
+  // 아래 값들은 새 경로가 기존 경로와 크게 다를 때만 발행하도록 하는 hysteresis 파라미터임.
+  double planner_publish_min_interval_sec_{1.20};
+  double planner_publish_force_interval_sec_{4.00};
+  double planner_path_avg_change_threshold_{0.12};
+  double planner_path_max_change_threshold_{0.35};
+  double planner_side_switch_lock_sec_{12.00};
+  double planner_side_switch_min_score_{0.20};
+  double planner_side_switch_clearance_{0.12};
+
+  double distanceToCurrentPath(double x, double y) const;
+
+  double computePathDifference(
+    const std::vector<geometry_msgs::msg::PoseStamped> & new_path,
+    const std::vector<geometry_msgs::msg::PoseStamped> & old_path,
+    double & max_dist) const;
+
+  bool shouldPublishPath(
+    const std::vector<geometry_msgs::msg::PoseStamped> & new_path) const;
 
   rclcpp::Time last_plan_time_;
 

@@ -214,29 +214,24 @@ const double h = center_dist * center_dist - r * r;
 
 
 
-const double recovery_enter_clearance = 0.03;
-const double recovery_exit_clearance  = 0.10;
+const double recovery_enter_clearance = 0.10;
+const double recovery_exit_clearance  = 0.24;
 
 const int preferred_turn_dir = (dbg_aw >= 0.0) ? 1 : -1;
 
-// nominal 명령이 CBF 제약을 실제로 위반하는지 확인함
-const double cbf_margin = 0.02;
-const bool nominal_violates_cbf = (dbg_lhs_nom < dbg_rhs + cbf_margin);
-
-if (recovery_active_ &&
-    (active.front().clearance > recovery_exit_clearance ||
-     !nominal_violates_cbf ||
-     active.front().forward_proj < -0.10)) {
-  recovery_active_ = false;
-  turn_dir_hold_ = 0;
+// 가까운 전방 장애물이 있으면 recovery 모드 진입함
+// 기존 코드에는 recovery_active_를 true로 만드는 부분이 없어 사실상 죽은 로직이었음
+if (!recovery_active_ &&
+    active.front().clearance < recovery_enter_clearance &&
+    active.front().forward_proj > -0.05) {
+  recovery_active_ = true;
+  turn_dir_hold_ = preferred_turn_dir;
 }
 
-// 충분히 멀어졌거나, nominal 입력만으로 안전하거나,
-// 장애물이 이미 뒤쪽으로 넘어가면 recovery 해제함
+// 충분히 멀어졌거나, 장애물이 뒤쪽으로 넘어가면 recovery 해제함
 if (recovery_active_ &&
     (active.front().clearance > recovery_exit_clearance ||
-     !nominal_violates_cbf ||
-     active.front().forward_proj < -0.05)) {
+     active.front().forward_proj < -0.10)) {
   recovery_active_ = false;
   turn_dir_hold_ = 0;
 }
@@ -251,23 +246,29 @@ double q_v_dev_eff = params_.q_v_dev;
 double q_w_dev_eff = params_.q_w_dev;
 
 if (recovery_mode) {
-  // 가까운 장애물에서는 전진 줄이고 회전 우선시함
-  v_nom_eff = std::min(std::max(v_nom, 0.02), 0.05);
+  // 매우 가까운 경우만 정지에 가깝게 두고, 그 밖에는 천천히 전진을 유지함.
+  // 동적 장애물에서 v=0/0.03, w=±max 패턴이 반복되면 stop-and-go가 커진다.
+  if (active.front().clearance < 0.03) {
+    v_nom_eff = 0.0;
+  } else if (active.front().clearance < 0.10) {
+    v_nom_eff = std::clamp(v_nom, 0.04, 0.07);
+  } else {
+    v_nom_eff = std::clamp(v_nom, 0.06, 0.10);
+  }
 
   if (turn_dir_hold_ == 0) {
     turn_dir_hold_ = preferred_turn_dir;
   }
 
-  // 최대 회전 대신 약간 낮춘 회전 명령 사용함
-  const double w_escape_mag = 0.45;
+  const double w_escape_mag = 0.22;
   double w_escape = static_cast<double>(turn_dir_hold_) * w_escape_mag;
 
   // 각속도 제한 안에 넣음
   w_escape = std::max(params_.w_min, std::min(params_.w_max, w_escape));
   w_nom_eff = w_escape;
 
-  // omega 변경을 덜 싫어하게 해서 회전이 잘 나오게 함
-  q_w_dev_eff = 0.08 * params_.q_w_dev;
+  // omega 변경을 덜 싫어하게 하되, 최대 회전으로 바로 붙는 현상은 줄임.
+  q_w_dev_eff = 0.20 * params_.q_w_dev;
 }
 
 
@@ -280,18 +281,20 @@ if (recovery_mode) {
   int P_nnz = n_var;
   int A_nnz = 4 * N + 2;
 
-    std::cout
-    << "[CBF dbg pre] N=" << N
-    << " clr=" << active.front().clearance
-    << " fwd=" << active.front().forward_proj
-    << " h=" << dbg_h
-    << " av=" << dbg_av
-    << " aw=" << dbg_aw
-    << " lhs_nom=" << dbg_lhs_nom
-    << " rhs=" << dbg_rhs
-    << " v_nom=" << v_nom
-    << " w_nom=" << w_nom
-    << std::endl;
+  if (dbg_print) {
+    std::cerr
+      << "[CBF dbg pre] N=" << N
+      << " clr=" << active.front().clearance
+      << " fwd=" << active.front().forward_proj
+      << " h=" << dbg_h
+      << " av=" << dbg_av
+      << " aw=" << dbg_aw
+      << " lhs_nom=" << dbg_lhs_nom
+      << " rhs=" << dbg_rhs
+      << " v_nom=" << v_nom
+      << " w_nom=" << w_nom
+      << std::endl;
+  }
 
   constexpr c_float INF = static_cast<c_float>(1e30);
 
