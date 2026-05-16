@@ -77,7 +77,9 @@ private:
   void markPlannerObstacleOnGrid(
     std::vector<int8_t> & grid, int w, int h,
     double origin_x, double origin_y, double resolution,
-    const PlannerObstacle & obs) const;
+    const PlannerObstacle & obs,
+    double robot_radius_for_mark,
+    double obstacle_margin_for_mark) const;
 
   // 장애물 근접 판정
   bool isObstacleNearPath(const std::vector<PlannerObstacle> & obs) const;
@@ -141,6 +143,15 @@ private:
   double planner_obstacle_merge_distance_{0.75};
   double planner_merge_extra_radius_{0.10};
   double planner_max_merged_obstacle_radius_{0.80};
+
+  // 피킹 스테이션 정밀 정차용 완화 파라미터.
+  // 일반 구간은 기존 보수적 inflation을 유지하고, goal 주변에서만 더 작은
+  // clearance를 허용해 fixed manipulator docking pose에 접근할 수 있게 함.
+  bool docking_mode_{false};
+  double docking_relax_radius_{1.00};
+  double docking_robot_radius_{0.30};
+  double docking_obstacle_margin_{0.03};
+  double docking_goal_search_radius_{1.20};
 
   // A* + MPC 통합 시 /planned_path가 너무 자주 바뀌면 MPC reference가 계속 리셋되어 stop-and-go가 생김.
   // 아래 값들은 새 경로가 기존 경로와 크게 다를 때만 발행하도록 하는 hysteresis 파라미터임.

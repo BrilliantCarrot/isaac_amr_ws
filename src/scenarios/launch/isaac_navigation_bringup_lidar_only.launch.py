@@ -84,6 +84,36 @@ def generate_launch_description():
         description="path planner 목표 y [map frame]",
     )
 
+    declare_docking_mode = DeclareLaunchArgument(
+        "docking_mode",
+        default_value="false",
+        description="true이면 goal 주변에서만 planner inflation을 완화해 docking pose 접근을 허용",
+    )
+
+    declare_docking_relax_radius = DeclareLaunchArgument(
+        "docking_relax_radius",
+        default_value="1.0",
+        description="docking_mode에서 완화된 inflation을 적용할 goal 주변 반경 [m]",
+    )
+
+    declare_docking_robot_radius = DeclareLaunchArgument(
+        "docking_robot_radius",
+        default_value="0.30",
+        description="docking_mode goal 주변에서 사용할 planner robot radius [m]",
+    )
+
+    declare_docking_obstacle_margin = DeclareLaunchArgument(
+        "docking_obstacle_margin",
+        default_value="0.03",
+        description="docking_mode goal 주변에서 사용할 obstacle margin [m]",
+    )
+
+    declare_docking_goal_search_radius = DeclareLaunchArgument(
+        "docking_goal_search_radius",
+        default_value="1.20",
+        description="goal이 완화 후에도 blocked일 때 근접 자유 셀을 찾는 반경 [m]",
+    )
+
     declare_trajectory_type = DeclareLaunchArgument(
         "trajectory_type",
         default_value="straight",
@@ -215,6 +245,11 @@ def generate_launch_description():
     use_global_planner = LaunchConfiguration("use_global_planner")
     goal_x = LaunchConfiguration("goal_x")
     goal_y = LaunchConfiguration("goal_y")
+    docking_mode = LaunchConfiguration("docking_mode")
+    docking_relax_radius = LaunchConfiguration("docking_relax_radius")
+    docking_robot_radius = LaunchConfiguration("docking_robot_radius")
+    docking_obstacle_margin = LaunchConfiguration("docking_obstacle_margin")
+    docking_goal_search_radius = LaunchConfiguration("docking_goal_search_radius")
     trajectory_type = LaunchConfiguration("trajectory_type")
     v_ref = LaunchConfiguration("v_ref")
     v_min = LaunchConfiguration("v_min")
@@ -371,6 +406,11 @@ def generate_launch_description():
                         "planner_lidar_astar_mode": "all",
                         "planner_replan_on_lidar_obstacles": False,
                         "map_update_replan_enabled": True,
+                        "docking_mode": docking_mode,
+                        "docking_relax_radius": docking_relax_radius,
+                        "docking_robot_radius": docking_robot_radius,
+                        "docking_obstacle_margin": docking_obstacle_margin,
+                        "docking_goal_search_radius": docking_goal_search_radius,
                     }
                 ],
             )
@@ -428,6 +468,11 @@ def generate_launch_description():
         declare_use_global_planner,
         declare_goal_x,
         declare_goal_y,
+        declare_docking_mode,
+        declare_docking_relax_radius,
+        declare_docking_robot_radius,
+        declare_docking_obstacle_margin,
+        declare_docking_goal_search_radius,
         declare_trajectory_type,
         declare_v_ref,
         declare_v_min,

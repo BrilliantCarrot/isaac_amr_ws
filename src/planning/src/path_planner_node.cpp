@@ -93,6 +93,14 @@ PathPlannerNode::PathPlannerNode(const rclcpp::NodeOptions & options)
   this->declare_parameter("planner_merge_extra_radius", 0.10);
   this->declare_parameter("planner_max_merged_obstacle_radius", 1.40);
 
+  // Fixed manipulator 피킹 스테이션 docking용 완화 모드.
+  // 일반 주행 safety margin은 유지하고, goal 주변에서만 더 작은 inflation을 사용함.
+  this->declare_parameter("docking_mode", false);
+  this->declare_parameter("docking_relax_radius", 1.00);
+  this->declare_parameter("docking_robot_radius", 0.30);
+  this->declare_parameter("docking_obstacle_margin", 0.03);
+  this->declare_parameter("docking_goal_search_radius", 1.20);
+
   // 선언된 파라미터 값을 멤버 변수에 로드
   goal_x_            = this->get_parameter("goal_x").as_double();
   goal_y_            = this->get_parameter("goal_y").as_double();
@@ -118,6 +126,11 @@ PathPlannerNode::PathPlannerNode(const rclcpp::NodeOptions & options)
   planner_obstacle_merge_distance_ = this->get_parameter("planner_obstacle_merge_distance").as_double();
   planner_merge_extra_radius_ = this->get_parameter("planner_merge_extra_radius").as_double();
   planner_max_merged_obstacle_radius_ = this->get_parameter("planner_max_merged_obstacle_radius").as_double();
+  docking_mode_ = this->get_parameter("docking_mode").as_bool();
+  docking_relax_radius_ = this->get_parameter("docking_relax_radius").as_double();
+  docking_robot_radius_ = this->get_parameter("docking_robot_radius").as_double();
+  docking_obstacle_margin_ = this->get_parameter("docking_obstacle_margin").as_double();
+  docking_goal_search_radius_ = this->get_parameter("docking_goal_search_radius").as_double();
   replan_cooldown_sec_ = this->get_parameter("replan_cooldown_sec").as_double();
   planner_publish_min_interval_sec_ = this->get_parameter("planner_publish_min_interval_sec").as_double();
   planner_publish_force_interval_sec_ = this->get_parameter("planner_publish_force_interval_sec").as_double();
@@ -182,13 +195,14 @@ PathPlannerNode::PathPlannerNode(const rclcpp::NodeOptions & options)
   RCLCPP_INFO(this->get_logger(),
     "[PathPlanner] 초기화 완료 | goal=(%.2f, %.2f) | "
     "robot_r=%.2fm | periodic_replan=%d replan=%.1fs off_path=%d(%.2fm) | "
-    "lidar_astar_mode=%s lidar_replan=%d map_update_replan=%d | wp_spacing=%.2fm | "
+    "lidar_astar_mode=%s lidar_replan=%d map_update_replan=%d | docking=%d relax=%.2fm | wp_spacing=%.2fm | "
     "publish_min=%.1fs force=%.1fs avg_thr=%.2fm max_thr=%.2fm",
     goal_x_, goal_y_, robot_radius_,
     periodic_replan_enabled_ ? 1 : 0, replan_period_sec_,
     off_path_replan_enabled_ ? 1 : 0, off_path_replan_dist_,
     planner_lidar_astar_mode_.c_str(), planner_replan_on_lidar_obstacles_ ? 1 : 0,
     map_update_replan_enabled_ ? 1 : 0,
+    docking_mode_ ? 1 : 0, docking_relax_radius_,
     wp_spacing_, planner_publish_min_interval_sec_, planner_publish_force_interval_sec_,
     planner_path_avg_change_threshold_, planner_path_max_change_threshold_);
 }
@@ -462,6 +476,33 @@ bool PathPlannerNode::plan()
   std::vector<int8_t> inflated =
     astar_.inflateMap(map_.data, W, H, inflation_cells);
 
+  // Docking mode: fixed Franka station 근처에서는 AMR이 tray를 작업영역에 넣기 위해
+  // 목표점 주변에 한정해 더 작은 robot radius로 계산한 inflation을 사용한다.
+  // 원본 occupied cell은 relaxed grid에서도 유지되므로 실제 장애물을 지우지는 않는다.
+  if (docking_mode_) {
+    int relaxed_inflation_cells =
+      static_cast<int>(std::ceil(std::max(0.0, docking_robot_radius_) / res));
+    std::vector<int8_t> relaxed =
+      astar_.inflateMap(map_.data, W, H, relaxed_inflation_cells);
+
+    int relax_cells = static_cast<int>(std::ceil(std::max(0.0, docking_relax_radius_) / res));
+    int copied_cells = 0;
+    for (int dy = -relax_cells; dy <= relax_cells; ++dy) {
+      for (int dx = -relax_cells; dx <= relax_cells; ++dx) {
+        if (dx * dx + dy * dy > relax_cells * relax_cells) continue;
+        int nx = ex + dx;
+        int ny = ey + dy;
+        if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+        inflated[ny * W + nx] = relaxed[ny * W + nx];
+        copied_cells++;
+      }
+    }
+
+    RCLCPP_INFO(this->get_logger(),
+      "[PathPlanner] docking mode: goal 주변 %.2fm 완화 적용 | robot_r %.2f→%.2f | cells=%d",
+      docking_relax_radius_, robot_radius_, docking_robot_radius_, copied_cells);
+  }
+
   // Step 3-1: LiDAR 장애물의 A* 반영 여부
   // 기본값 planner_lidar_astar_mode=all.
   // RViz에서 보이는 /obstacles/detected가 global path에도 반영되도록 inflated grid에 마킹함.
@@ -490,7 +531,16 @@ bool PathPlannerNode::plan()
         continue;
       }
 
-      markPlannerObstacleOnGrid(inflated, W, H, ox, oy, res, obs);
+      const double dist_obs_to_goal = std::hypot(obs.x - goal_x_, obs.y - goal_y_);
+      const bool use_docking_clearance =
+        docking_mode_ && dist_obs_to_goal <= docking_relax_radius_;
+      const double mark_robot_radius =
+        use_docking_clearance ? docking_robot_radius_ : robot_radius_;
+      const double mark_margin =
+        use_docking_clearance ? docking_obstacle_margin_ : planner_obstacle_margin_;
+
+      markPlannerObstacleOnGrid(
+        inflated, W, H, ox, oy, res, obs, mark_robot_radius, mark_margin);
       marked_count++;
     }
 
@@ -534,7 +584,10 @@ bool PathPlannerNode::plan()
     RCLCPP_WARN(this->get_logger(),
       "[PathPlanner] 목표점이 팽창 영역 내부 — 근접 자유 셀로 이동");
     bool found = false;
-    for (int r = 1; r <= 15 && !found; ++r) {
+    int goal_search_cells = docking_mode_
+      ? static_cast<int>(std::ceil(std::max(docking_goal_search_radius_, res) / res))
+      : 15;
+    for (int r = 1; r <= goal_search_cells && !found; ++r) {
       for (int dy = -r; dy <= r && !found; ++dy) {
         for (int dx = -r; dx <= r && !found; ++dx) {
           int nx = ex + dx, ny = ey + dy;
@@ -1250,14 +1303,18 @@ std::vector<PlannerObstacle> PathPlannerNode::getMergedPlannerObstacles() const
 void PathPlannerNode::markPlannerObstacleOnGrid(
   std::vector<int8_t> & grid, int w, int h,
   double origin_x, double origin_y, double resolution,
-  const PlannerObstacle & obs) const
+  const PlannerObstacle & obs,
+  double robot_radius_for_mark,
+  double obstacle_margin_for_mark) const
 {
   int obs_gx = static_cast<int>((obs.x - origin_x) / resolution);
   int obs_gy = static_cast<int>((obs.y - origin_y) / resolution);
 
   // 로봇 외접 반경 + 장애물 반경 + planner 여유 마진을 모두 반영함.
   double effective_radius =
-    std::max(obs.radius, planner_min_obstacle_radius_) + robot_radius_ + planner_obstacle_margin_;
+    std::max(obs.radius, planner_min_obstacle_radius_) +
+    std::max(0.0, robot_radius_for_mark) +
+    std::max(0.0, obstacle_margin_for_mark);
   int r_cells = static_cast<int>(std::ceil(effective_radius / resolution));
 
   for (int dy = -r_cells; dy <= r_cells; ++dy) {

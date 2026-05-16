@@ -1,0 +1,34 @@
+franka_basic_motion_node:
+  ros__parameters:
+    use_sim_time: true
+
+    joint_command_topic: /franka/joint_command
+    auto_start: true
+    command_repeat_count: 5
+    command_repeat_period_sec: 0.10
+    settle_duration_sec: 2.00
+    gripper_settle_duration_sec: 1.00
+
+    arm_joint_names:
+      - panda_joint1
+      - panda_joint2
+      - panda_joint3
+      - panda_joint4
+      - panda_joint5
+      - panda_joint6
+      - panda_joint7
+
+    gripper_joint_names:
+      - panda_finger_joint1
+      - panda_finger_joint2
+
+    # 현재 Isaac Sim 수동 명령으로 검증한 pose를 home 기본값으로 사용함.
+    home_positions: [0.0, -0.5, 0.0, -2.3, 0.0, 2.0, 0.8]
+    pre_pick_positions: [0.15, -0.75, 0.10, -2.20, 0.00, 1.65, 0.90]
+    pick_positions: [0.15, -0.55, 0.10, -2.45, 0.00, 1.95, 0.90]
+    lift_positions: [0.15, -0.90, 0.10, -2.05, 0.00, 1.45, 0.90]
+    pre_place_positions: [-0.55, -0.80, 0.20, -2.00, 0.05, 1.45, 0.70]
+    place_positions: [-0.55, -0.55, 0.20, -2.35, 0.05, 1.85, 0.70]
+
+    gripper_open_positions: [0.04, 0.04]
+    gripper_closed_positions: [0.0, 0.0]
